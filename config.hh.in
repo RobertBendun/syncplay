@@ -1,0 +1,8 @@
+#ifndef SYNCPLAY_CONFIG
+#define SYNCPLAY_CONFIG
+
+#include <string_view>
+
+constexpr std::string_view Version = "@PROJECT_VERSION@";
+
+#endif // SYNCPLAY_CONFIG

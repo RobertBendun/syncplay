@@ -13,3 +13,6 @@ drafts.cc
 release_*
 *.zip
 *.html
+*.mid
+*.ini
+build

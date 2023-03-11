@@ -1,0 +1,15 @@
+.ccls-cache
+bin/*
+compile_commands.json
+coverage
+doc/musique
+doc/build
+doc/source/api
+doc/*.html
+doc/*.pdf
+__pycache__
+drafts.cc
+.cache
+release_*
+*.zip
+*.html

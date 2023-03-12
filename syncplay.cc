@@ -10,6 +10,90 @@
 #include <RtMidi.h>
 #include <set>
 
+std::optional<ImGuiKey> to_key(char c) {
+	switch (c) {
+	case 'A': case 'a': return {ImGuiKey_A};
+	case 'B': case 'b': return {ImGuiKey_B};
+	case 'C': case 'c': return {ImGuiKey_C};
+	case 'D': case 'd': return {ImGuiKey_D};
+	case 'E': case 'e': return {ImGuiKey_E};
+	case 'F': case 'f': return {ImGuiKey_F};
+	case 'G': case 'g': return {ImGuiKey_G};
+	case 'H': case 'h': return {ImGuiKey_H};
+	case 'I': case 'i': return {ImGuiKey_I};
+	case 'J': case 'j': return {ImGuiKey_J};
+	case 'K': case 'k': return {ImGuiKey_K};
+	case 'L': case 'l': return {ImGuiKey_L};
+	case 'M': case 'm': return {ImGuiKey_M};
+	case 'N': case 'n': return {ImGuiKey_N};
+	case 'O': case 'o': return {ImGuiKey_O};
+	case 'P': case 'p': return {ImGuiKey_P};
+	case 'Q': case 'q': return {ImGuiKey_Q};
+	case 'R': case 'r': return {ImGuiKey_R};
+	case 'S': case 's': return {ImGuiKey_S};
+	case 'T': case 't': return {ImGuiKey_T};
+	case 'U': case 'u': return {ImGuiKey_U};
+	case 'V': case 'v': return {ImGuiKey_V};
+	case 'W': case 'w': return {ImGuiKey_W};
+	case 'X': case 'x': return {ImGuiKey_X};
+	case 'Y': case 'y': return {ImGuiKey_Y};
+	case 'Z': case 'z': return {ImGuiKey_Z};
+	case '0': return {ImGuiKey_0};
+	case '1': return {ImGuiKey_1};
+	case '2': return {ImGuiKey_2};
+	case '3': return {ImGuiKey_3};
+	case '4': return {ImGuiKey_4};
+	case '5': return {ImGuiKey_5};
+	case '6': return {ImGuiKey_6};
+	case '7': return {ImGuiKey_7};
+	case '8': return {ImGuiKey_8};
+	case '9': return {ImGuiKey_9};
+	default: return std::nullopt;
+	}
+}
+
+std::optional<char> from_key(ImGuiKey key) {
+	switch (key) {
+	case ImGuiKey_A: return {'A'};
+	case ImGuiKey_B: return {'B'};
+	case ImGuiKey_C: return {'C'};
+	case ImGuiKey_D: return {'D'};
+	case ImGuiKey_E: return {'E'};
+	case ImGuiKey_F: return {'F'};
+	case ImGuiKey_G: return {'G'};
+	case ImGuiKey_H: return {'H'};
+	case ImGuiKey_I: return {'I'};
+	case ImGuiKey_J: return {'J'};
+	case ImGuiKey_K: return {'K'};
+	case ImGuiKey_L: return {'L'};
+	case ImGuiKey_M: return {'M'};
+	case ImGuiKey_N: return {'N'};
+	case ImGuiKey_O: return {'O'};
+	case ImGuiKey_P: return {'P'};
+	case ImGuiKey_Q: return {'Q'};
+	case ImGuiKey_R: return {'R'};
+	case ImGuiKey_S: return {'S'};
+	case ImGuiKey_T: return {'T'};
+	case ImGuiKey_U: return {'U'};
+	case ImGuiKey_V: return {'V'};
+	case ImGuiKey_W: return {'W'};
+	case ImGuiKey_X: return {'X'};
+	case ImGuiKey_Y: return {'Y'};
+	case ImGuiKey_Z: return {'Z'};
+	case ImGuiKey_0: return {'0'};
+	case ImGuiKey_1: return {'1'};
+	case ImGuiKey_2: return {'2'};
+	case ImGuiKey_3: return {'3'};
+	case ImGuiKey_4: return {'4'};
+	case ImGuiKey_5: return {'5'};
+	case ImGuiKey_6: return {'6'};
+	case ImGuiKey_7: return {'7'};
+	case ImGuiKey_8: return {'8'};
+	case ImGuiKey_9: return {'9'};
+	default: return std::nullopt;
+	}
+}
+
 struct Midi_File_State
 {
 	char key[2];

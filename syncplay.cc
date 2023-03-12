@@ -1,13 +1,20 @@
-#include <MidiFile.h>
 #include <ableton/Link.hpp>
 #include <cassert>
 #include <config.hh>
 #include <filesystem>
 #include <hello_imgui/hello_imgui.h>
 #include <iostream>
+#include <MidiFile.h>
 #include <optional>
 #include <portable-file-dialogs.h>
+#include <RtMidi.h>
 #include <set>
+
+struct Midi_File_State
+{
+	char key[2];
+	int port = 1;
+};
 
 struct State
 {
@@ -16,9 +23,16 @@ struct State
 	State();
 	~State() { the = nullptr; }
 
+	// Render state
 	void loop();
+
+	// Do something with state
 	void ask_for_midi_files();
 	void check_if_midi_files_arrived();
+	void refresh_midi_ports_list();
+
+	// Query state
+	bool port_number_available(int port);
 
 	inline static State *the;
 
@@ -26,7 +40,12 @@ struct State
 	std::set<std::filesystem::path> known_midi_files;
 	std::filesystem::path last_open_directory;
 
+	std::vector<Midi_File_State> midi_states;
+
 	ableton::Link link;
+
+	// Invariant: has the same order as ports in RTMidi
+	std::vector<std::string> midi_ports_list;
 };
 
 State::State()
@@ -36,6 +55,7 @@ State::State()
 	the = this;
 	link.enable(true);
 	link.enableStartStopSync(true);
+	refresh_midi_ports_list();
 }
 
 void State::ask_for_midi_files()
@@ -55,9 +75,25 @@ void State::check_if_midi_files_arrived()
 {
 	if (open_file && open_file->ready(0)) {
 		auto files = open_file->result();
+		midi_states.clear();
 		std::move(files.begin(), files.end(), std::inserter(known_midi_files, known_midi_files.begin()));
+		midi_states.resize(files.size());
 		open_file.reset();
 	}
+}
+
+void State::refresh_midi_ports_list()
+{
+	midi_ports_list.clear();
+	RtMidiOut out;
+	for (auto i = 0; i < out.getPortCount(); ++i) {
+		midi_ports_list.push_back(out.getPortName(i));
+	}
+}
+
+bool State::port_number_available(int port)
+{
+	return port > 0 && unsigned(port-1) < midi_ports_list.size();
 }
 
 void State::loop()
@@ -79,7 +115,23 @@ void State::loop()
 		ImGui::Text("Playing: %s", session_state.isPlaying() ? "Playing" : "Stopped");
 	}
 
-	ImGui::SeparatorText("Personal state settings"); {
+	ImGui::SeparatorText("MIDI ports"); {
+		// TODO Virtual port
+		if (ImGui::Button("Refresh ports list")) {
+			refresh_midi_ports_list();
+		}
+
+		if (ImGui::IsItemHovered()) {
+			ImGui::SetTooltip("Updates lists of available MIDI ports");
+		}
+
+		unsigned i = 0;
+		for (auto const& port_name : midi_ports_list) {
+			ImGui::Text("%u. %s", ++i, port_name.c_str());
+		}
+	}
+
+	ImGui::SeparatorText("Loaded MIDI files"); {
 		if (ImGui::Button("Add MIDI file")) {
 			ask_for_midi_files();
 		}
@@ -87,18 +139,15 @@ void State::loop()
 		if (ImGui::IsItemHovered()) {
 			ImGui::SetTooltip("Loads new MIDI file that will be available for synchronized playing");
 		}
-	}
 
-	ImGui::SeparatorText("Loaded MIDI files"); {
 		if (not known_midi_files.empty()) {
 			if (ImGui::BeginTable("known_midi_files", 3)) {
-				static char const* columns[] = {
-					"Key",
-					"Port",
-					"File",
-				};
-
 				/* header */ {
+					static char const* columns[] = {
+						"Key",
+						"Port",
+						"File",
+					};
 					unsigned i = 0;
 					ImGui::TableNextRow();
 					for (auto const& header : columns) {
@@ -107,9 +156,27 @@ void State::loop()
 					}
 				}
 
+				unsigned i = 0;
 				for (auto const& file : known_midi_files) {
+					auto &file_state = midi_states[i++];
 					ImGui::TableNextRow();
+
+					std::string label = "##key" + std::to_string(i);
+					ImGui::TableSetColumnIndex(0);
+					ImGui::InputText(label.c_str(), file_state.key, sizeof(file_state.key));
+
+					label = "##port" + std::to_string(i);
 					ImGui::TableSetColumnIndex(1);
+					bool valid_port = port_number_available(file_state.port);
+					if (!valid_port) {
+						ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ImColor::HSV(0.f, 0.6f, 0.6f));
+					}
+					ImGui::InputInt(label.c_str(), &file_state.port, 1, 1);
+					if (!valid_port) {
+						ImGui::PopStyleColor();
+					}
+
+					ImGui::TableSetColumnIndex(2);
 					ImGui::Text("%s", file.c_str());
 				}
 				ImGui::EndTable();

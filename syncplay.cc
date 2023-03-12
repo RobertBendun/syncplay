@@ -1,11 +1,13 @@
-#include "hello_imgui/hello_imgui.h"
-#include <cassert>
-#include "config.hh"
-#include "portable-file-dialogs.h"
-#include <optional>
-#include <filesystem>
-#include <set>
+#include <MidiFile.h>
 #include <ableton/Link.hpp>
+#include <cassert>
+#include <config.hh>
+#include <filesystem>
+#include <hello_imgui/hello_imgui.h>
+#include <iostream>
+#include <optional>
+#include <portable-file-dialogs.h>
+#include <set>
 
 struct State
 {
@@ -125,6 +127,84 @@ void State::loop()
 	}
 }
 
+static double tempo = -1;
+
+struct Note_Event
+{
+	enum class Type
+	{
+		Note_On,
+		Note_Off,
+	};
+
+	Type type;
+	double time;
+	unsigned channel;
+	unsigned note;
+	unsigned velocity;
+
+	Note_Event(smf::MidiFile const& file, smf::MidiEvent const& event)
+	{
+		time = event.tick * 60.0 / tempo / file.getTicksPerQuarterNote();
+
+		if (event.isNote()) {
+			assert(tempo == -1);
+			type = event.isNoteOn() ? Type::Note_On : Type::Note_Off;
+			channel = event.getChannel();
+			note = event.getKeyNumber();
+			velocity = event.getVelocity();
+			return;
+		}
+
+		if (event.isTempo()) {
+			double microseconds = event.getTempoMicroseconds();
+			tempo = 60.0 / microseconds * 1000000.0;
+			return;
+		}
+	}
+
+	friend std::ostream& operator<<(std::ostream& out, Note_Event const& m)
+	{
+		switch (m.type) {
+		case Note_Event::Type::Note_On:
+			return out << "Note On {" << m.channel << ", " << m.note << ", " << m.velocity << ", " << m.time << "}";
+		case Note_Event::Type::Note_Off:
+			return out << "Note Off {" << m.channel << ", " << m.note << ", " << m.time << "}";
+		}
+		return out;
+	}
+};
+
+std::vector<Note_Event> load_midi_file(std::string const& path)
+{
+	smf::MidiFile midi("/home/diana/uam/project/y/wk/A/A rytm.mid");
+	// std::cout << "File duration: " << midi.getFileDurationInSeconds() << std::endl;
+
+	assert(midi.getStatus());
+
+	midi.doTimeAnalysis();
+	midi.linkEventPairs();
+	midi.linkNotePairs();
+	midi.sortTracks();
+	midi.joinTracks();
+	midi.absoluteTicks();
+	// midi.deltaTicks();
+
+	auto ticks = midi.getTicksPerQuarterNote();
+
+	assert(midi.getTrackCount() == 1);
+
+	std::vector<Note_Event> events;
+
+	auto const& track = midi[0];
+	for (auto j = 0u; j < track.getEventCount(); ++j) {
+		auto const& event = track.getEvent(j);
+		events.emplace_back(midi, event);
+	}
+
+	return events;
+}
+
 int main()
 {
 	assert(pfd::settings::available());
@@ -132,4 +212,6 @@ int main()
 
 	State s;
 	HelloImGui::Run([]{ State::the->loop(); }, "SyncPlay " + std::string(Version), false, true, {600,600});
+
+	return 0;
 }

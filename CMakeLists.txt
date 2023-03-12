@@ -18,5 +18,27 @@ include(hello_imgui_add_app)
 
 include(link/AbletonLinkConfig.cmake)
 
+include_directories(midifile/include/)
+
+set(SRCS
+   midifile/src/Options.cpp
+   midifile/src/Binasc.cpp
+   midifile/src/MidiEvent.cpp
+   midifile/src/MidiEventList.cpp
+   midifile/src/MidiFile.cpp
+   midifile/src/MidiMessage.cpp
+)
+set(HDRS
+    midifile/include/Binasc.h
+    midifile/include/MidiEvent.h
+    midifile/include/MidiEventList.h
+    midifile/include/MidiFile.h
+    midifile/include/MidiMessage.h
+    midifile/include/Options.h
+)
+add_library(midifile STATIC ${SRCS} ${HDRS})
+
+include_directories(.)
+
 hello_imgui_add_app(syncplay syncplay.cc)
-target_link_libraries(syncplay PRIVATE Ableton::Link)
+target_link_libraries(syncplay PRIVATE Ableton::Link midifile)

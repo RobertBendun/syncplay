@@ -16,3 +16,4 @@ release_*
 *.mid
 *.ini
 build
+.syncplay

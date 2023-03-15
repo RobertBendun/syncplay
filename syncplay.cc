@@ -110,6 +110,12 @@ struct State
 	// Render state
 	void loop();
 
+	// Read known fields from state cache
+	void read_state_cache_from_file();
+
+	// Write current state to cache file
+	void write_state_cache_to_file();
+
 	// Do something with state
 	void ask_for_midi_files();
 	void check_if_midi_files_arrived();
@@ -140,6 +146,32 @@ State::State()
 	link.enable(true);
 	link.enableStartStopSync(true);
 	refresh_midi_ports_list();
+	read_state_cache_from_file();
+}
+
+
+void State::read_state_cache_from_file()
+{
+	std::ifstream fin(".syncplay");
+
+	if (!fin.is_open()) {
+		return;
+	}
+
+	std::string last_open_directory;
+	if (!std::getline(fin, last_open_directory))
+		return;
+	this->last_open_directory = last_open_directory;
+}
+
+void State::write_state_cache_to_file()
+{
+	std::ofstream out(".syncplay");
+	if (!out.is_open()) {
+		return;
+	}
+
+	out << last_open_directory.string() << '\n';
 }
 
 void State::ask_for_midi_files()
@@ -160,9 +192,11 @@ void State::check_if_midi_files_arrived()
 	if (open_file && open_file->ready(0)) {
 		auto files = open_file->result();
 		midi_states.clear();
+		last_open_directory = std::filesystem::path(files.back()).parent_path();
 		std::move(files.begin(), files.end(), std::inserter(known_midi_files, known_midi_files.begin()));
 		midi_states.resize(files.size());
 		open_file.reset();
+		write_state_cache_to_file();
 	}
 }
 
@@ -331,7 +365,7 @@ std::vector<Note_Event> load_midi_file(std::string const& path)
 	smf::MidiFile midi("/home/diana/uam/project/y/wk/A/A rytm.mid");
 	// std::cout << "File duration: " << midi.getFileDurationInSeconds() << std::endl;
 
-	assert(midi.getStatus());
+	assert(midi.status());
 
 	midi.doTimeAnalysis();
 	midi.linkEventPairs();

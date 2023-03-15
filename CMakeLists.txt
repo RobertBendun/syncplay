@@ -41,6 +41,7 @@ add_library(midifile STATIC ${SRCS} ${HDRS})
 include_directories(.)
 
 add_subdirectory(rtmidi)
+add_subdirectory(portable-file-dialogs)
 
 hello_imgui_add_app(syncplay syncplay.cc)
-target_link_libraries(syncplay PRIVATE Ableton::Link midifile rtmidi)
+target_link_libraries(syncplay PRIVATE Ableton::Link midifile rtmidi portable_file_dialogs)

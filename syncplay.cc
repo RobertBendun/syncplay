@@ -281,7 +281,7 @@ void State::check_if_midi_files_arrived()
 			auto it = known_midi_files.begin();
 			for (auto i = 0u; i < known_midi_files.size(); ++i, ++it) {
 				auto const& path = *it;
-				events_per_file.push_back(std::make_unique<std::vector<Note_Event>>(load_midi_file(path)));
+				events_per_file.push_back(std::make_unique<std::vector<Note_Event>>(load_midi_file(path.string())));
 
 #if 0
 				std::cout << *it << '\n';

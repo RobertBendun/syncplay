@@ -1,6 +1,7 @@
 #include <ableton/Link.hpp>
 #include <cassert>
 #include <config.hh>
+#include <exception>
 #include <filesystem>
 #include <hello_imgui/hello_imgui.h>
 #include <iostream>
@@ -9,6 +10,7 @@
 #include <portable-file-dialogs.h>
 #include <RtMidi.h>
 #include <set>
+#include <span>
 
 std::optional<ImGuiKey> to_key(char c) {
 	switch (c) {
@@ -96,9 +98,60 @@ std::optional<char> from_key(ImGuiKey key) {
 
 struct Midi_File_State
 {
-	char key[2];
+	char key[2] = {};
 	int port = 1;
+	bool error = false;
 };
+
+struct Note_Event
+{
+	enum class Type
+	{
+		Note_On,
+		Note_Off,
+	};
+
+	Type type;
+	double time;
+	unsigned channel;
+	unsigned note;
+	unsigned velocity;
+
+	inline static double tempo = -1;
+
+	Note_Event(smf::MidiFile const& file, smf::MidiEvent const& event)
+	{
+		time = event.tick * 60.0 / tempo / file.getTicksPerQuarterNote();
+
+		if (event.isNote()) {
+			type = event.isNoteOn() ? Type::Note_On : Type::Note_Off;
+			channel = event.getChannel();
+			note = event.getKeyNumber();
+			velocity = event.getVelocity();
+			return;
+		}
+
+		if (event.isTempo()) {
+			double microseconds = event.getTempoMicroseconds();
+			tempo = 60.0 / microseconds * 1000000.0;
+			return;
+		}
+
+		throw std::invalid_argument("Unimplemented midi event type");
+	}
+
+	friend std::ostream& operator<<(std::ostream& out, Note_Event const& m)
+	{
+		switch (m.type) {
+		case Note_Event::Type::Note_On:
+			return out << "Note On {" << m.channel << ", " << m.note << ", " << m.velocity << ", " << m.time << "}";
+		case Note_Event::Type::Note_Off:
+			return out << "Note Off {" << m.channel << ", " << m.note << ", " << m.time << "}";
+		}
+		return out;
+	}
+};
+
 
 struct State
 {
@@ -124,18 +177,37 @@ struct State
 	// Query state
 	bool port_number_available(int port);
 
+	// Synchronization mechanism
+	void audio_session();
+
+	// Playing mechanism
+	void switch_midi_file_to(unsigned id);
+
 	inline static State *the;
+
+	std::atomic<bool> quit = false;
 
 	std::optional<pfd::open_file> open_file;
 	std::set<std::filesystem::path> known_midi_files;
 	std::filesystem::path last_open_directory;
 
 	std::vector<Midi_File_State> midi_states;
+	std::vector<std::unique_ptr<std::vector<Note_Event>>> events_per_file;
+	std::span<Note_Event> events_to_play;
+	int selected_file = -1;
 
 	ableton::Link link;
 
 	// Invariant: has the same order as ports in RTMidi
-	std::vector<std::string> midi_ports_list;
+	std::vector<std::string> midi_ports_list{};
+	std::vector<RtMidiOut> midi_output_ports;
+
+	// Synchronization state
+	std::atomic<bool> request_start = false;
+	std::atomic<bool> request_stop = false;
+	std::atomic<bool> is_playing = false;
+	std::atomic<double> quantum = 4;
+
 };
 
 State::State()
@@ -148,7 +220,6 @@ State::State()
 	refresh_midi_ports_list();
 	read_state_cache_from_file();
 }
-
 
 void State::read_state_cache_from_file()
 {
@@ -187,25 +258,53 @@ void State::ask_for_midi_files()
 	);
 }
 
+std::vector<Note_Event> load_midi_file(std::string const& path);
+
 void State::check_if_midi_files_arrived()
 {
 	if (open_file && open_file->ready(0)) {
 		auto files = open_file->result();
 		midi_states.clear();
+		events_per_file.clear();
+		events_to_play = {};
+
 		last_open_directory = std::filesystem::path(files.back()).parent_path();
 		std::move(files.begin(), files.end(), std::inserter(known_midi_files, known_midi_files.begin()));
 		midi_states.resize(files.size());
 		open_file.reset();
 		write_state_cache_to_file();
+
+		{
+			auto it = known_midi_files.begin();
+			for (auto i = 0u; i < known_midi_files.size(); ++i, ++it) {
+				auto const& path = *it;
+				events_per_file.push_back(std::make_unique<std::vector<Note_Event>>(load_midi_file(path)));
+
+#if 0
+				std::cout << *it << '\n';
+				for (auto const& events : *events_per_file.back()) {
+					std::cout << "  " << events << '\n';
+				}
+				std::cout << std::endl;
+#endif
+
+				std::sort(events_per_file.back()->begin(), events_per_file.back()->end(), [](Note_Event const& lhs, Note_Event const& rhs) {
+					return lhs.time < rhs.time;
+				});
+			}
+		}
 	}
 }
 
 void State::refresh_midi_ports_list()
 {
 	midi_ports_list.clear();
+	midi_output_ports.clear();
+
 	RtMidiOut out;
 	for (auto i = 0; i < out.getPortCount(); ++i) {
 		midi_ports_list.push_back(out.getPortName(i));
+		midi_output_ports.emplace_back().openPort(i);
 	}
 }
 
@@ -214,12 +313,117 @@ bool State::port_number_available(int port)
 	return port > 0 && unsigned(port-1) < midi_ports_list.size();
 }
 
+template<std::size_t N>
+inline void send_message(RtMidiOut &out, std::array<std::uint8_t, N> message)
+try {
+	out.sendMessage(message.data(), message.size());
+} catch (RtMidiError &error) {
+	std::cerr << "Failed to use MIDI connection: " << error.getMessage() << std::endl;
+	std::exit(33);
+}
+
+enum : std::uint8_t
+{
+	Control_Change = 0b1011'0000,
+	Note_Off       = 0b1000'0000,
+	Note_On        = 0b1001'0000,
+	Program_Change = 0b1100'0000,
+};
+
+void send_note_on(RtMidiOut &output, uint8_t channel, int8_t note_number, uint8_t velocity)
+{
+	send_message(output, std::array { std::uint8_t(Note_On + channel), std::bit_cast<uint8_t>(note_number), velocity });
+}
+
+void send_note_off(RtMidiOut &output, uint8_t channel, int8_t note_number)
+{
+	send_message(output, std::array { std::uint8_t(Note_Off + channel), std::bit_cast<uint8_t>(note_number), uint8_t(0) });
+}
+
+void State::audio_session()
+{
+	bool skip_one = false;
+	while (!quit) {
+		{
+			auto session_state = link.captureAppSessionState();
+			auto const time = link.clock().micros();
+			auto const beat = session_state.beatAtTime(time, quantum);
+
+			if (request_start) {
+				session_state.setIsPlaying(true, time);
+				request_start = false;
+			}
+
+			if (request_stop) {
+				session_state.setIsPlaying(false, time);
+				request_stop = false;
+			}
+
+			if (!is_playing && session_state.isPlaying()) {
+				session_state.requestBeatAtStartPlayingTime(0, quantum);
+				events_to_play = *events_per_file[selected_file];
+				is_playing = true;
+			}
+
+			if (is_playing && !session_state.isPlaying()) {
+				is_playing = false;
+			}
+
+			link.commitAppSessionState(session_state);
+		}
+
+		auto session_state = link.captureAppSessionState();
+		auto const time = link.clock().micros();
+		auto const beat = session_state.beatAtTime(time, quantum);
+
+		if (is_playing) {
+			auto to_play = events_to_play;
+			while (events_to_play.size() && events_to_play.front().time < beat) {
+				auto const& event = events_to_play.front();
+				auto port = midi_states[this->selected_file].port;
+				assert(port != 0 && "unimplemented");
+				if (port < 1 || port > midi_ports_list.size()) {
+					events_to_play = events_to_play.subspan(1);
+					continue;
+				}
+
+				switch (event.type) {
+				break; case Note_Event::Type::Note_On:
+					send_note_on(midi_output_ports[port-1], event.channel, event.note, event.velocity);
+
+				break; case Note_Event::Type::Note_Off:
+					send_note_off(midi_output_ports[port-1], event.channel, event.note);
+				}
+				std::cout << event << '\n';
+				events_to_play = events_to_play.subspan(1);
+			}
+		}
+
+		// FIXME If we are not playing maybe we should sleep until condition variable is invoked?
+		// FIXME If we are playing then we know how much we need to wait for another note to appear
+		std::this_thread::sleep_for(std::chrono::microseconds(3));
+	}
+}
+
+void State::switch_midi_file_to(unsigned id)
+{
+	assert(id < midi_states.size());
+	assert(id < events_per_file.size());
+
+	// TODO remove currently playing notes
+	events_to_play = *events_per_file[id];
+	selected_file = id;
+}
+
 void State::loop()
 {
 	auto session_state = link.captureAppSessionState();
 	auto const time = link.clock().micros();
 	double bpm = session_state.tempo();
 	bool changed_session_state = false;
+
+	double const quantum = 4;
+	auto const beats = session_state.beatAtTime(time, quantum);
 
 	check_if_midi_files_arrived();
 
@@ -230,7 +434,8 @@ void State::loop()
 		}
 
 		ImGui::Text("Peers: %zu", link.numPeers());
-		ImGui::Text("Playing: %s", session_state.isPlaying() ? "Playing" : "Stopped");
+		ImGui::Text("Beats: %.0f", std::floor(beats));
+		ImGui::Text("Playing: %s", is_playing ? "Playing" : "Stopped");
 	}
 
 	ImGui::SeparatorText("MIDI ports"); {
@@ -274,10 +479,15 @@ void State::loop()
 					}
 				}
 
-				unsigned i = 0;
-				for (auto const& file : known_midi_files) {
-					auto &file_state = midi_states[i++];
+				auto it = known_midi_files.begin();
+				for (auto i = 0u; i < known_midi_files.size(); ++i, ++it) {
+					auto const& file = *it;
+					auto& file_state = midi_states[i];
 					ImGui::TableNextRow();
+
+					if (i == selected_file) {
+						ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImVec4(0.3f, 0.3f, 0.7f, 0.65f)));
+					}
 
 					std::string label = "##key" + std::to_string(i);
 					ImGui::TableSetColumnIndex(0);
@@ -303,66 +513,28 @@ void State::loop()
 	}
 
 	if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
-		session_state.setIsPlaying(not session_state.isPlaying(), time);
-		changed_session_state = true;
+		if (is_playing) {
+			request_stop = true;
+		} else {
+			request_start = true;
+		}
 	}
 
-	if (changed_session_state) {
-		link.commitAppSessionState(session_state);
+	for (auto i = 0u; i < midi_states.size(); ++i) {
+		auto const& midi_state = midi_states[i];
+		if (*midi_state.key != '\0') {
+			if (auto key = to_key(*midi_state.key)) {
+				if (ImGui::IsKeyPressed(*key)) {
+					switch_midi_file_to(i);
+				}
+			}
+		}
 	}
 }
 
-static double tempo = -1;
-
-struct Note_Event
-{
-	enum class Type
-	{
-		Note_On,
-		Note_Off,
-	};
-
-	Type type;
-	double time;
-	unsigned channel;
-	unsigned note;
-	unsigned velocity;
-
-	Note_Event(smf::MidiFile const& file, smf::MidiEvent const& event)
-	{
-		time = event.tick * 60.0 / tempo / file.getTicksPerQuarterNote();
-
-		if (event.isNote()) {
-			assert(tempo == -1);
-			type = event.isNoteOn() ? Type::Note_On : Type::Note_Off;
-			channel = event.getChannel();
-			note = event.getKeyNumber();
-			velocity = event.getVelocity();
-			return;
-		}
-
-		if (event.isTempo()) {
-			double microseconds = event.getTempoMicroseconds();
-			tempo = 60.0 / microseconds * 1000000.0;
-			return;
-		}
-	}
-
-	friend std::ostream& operator<<(std::ostream& out, Note_Event const& m)
-	{
-		switch (m.type) {
-		case Note_Event::Type::Note_On:
-			return out << "Note On {" << m.channel << ", " << m.note << ", " << m.velocity << ", " << m.time << "}";
-		case Note_Event::Type::Note_Off:
-			return out << "Note Off {" << m.channel << ", " << m.note << ", " << m.time << "}";
-		}
-		return out;
-	}
-};
-
 std::vector<Note_Event> load_midi_file(std::string const& path)
 {
-	smf::MidiFile midi("/home/diana/uam/project/y/wk/A/A rytm.mid");
+	smf::MidiFile midi(path);
 	// std::cout << "File duration: " << midi.getFileDurationInSeconds() << std::endl;
 
 	assert(midi.status());
@@ -373,7 +545,6 @@ std::vector<Note_Event> load_midi_file(std::string const& path)
 	midi.sortTracks();
 	midi.joinTracks();
 	midi.absoluteTicks();
-	// midi.deltaTicks();
 
 	auto ticks = midi.getTicksPerQuarterNote();
 
@@ -384,7 +555,7 @@ std::vector<Note_Event> load_midi_file(std::string const& path)
 	auto const& track = midi[0];
 	for (auto j = 0u; j < track.getEventCount(); ++j) {
 		auto const& event = track.getEvent(j);
-		events.emplace_back(midi, event);
+		try { events.emplace_back(midi, event); } catch (std::exception const&) {}
 	}
 
 	return events;
@@ -396,7 +567,13 @@ int main()
 	pfd::settings::verbose(false);
 
 	State s;
+
+	std::thread th(&State::audio_session, std::ref(s));
+
 	HelloImGui::Run([]{ State::the->loop(); }, "SyncPlay " + std::string(Version), false, true, {600,600});
+
+	s.quit = true;
+	th.join();
 
 	return 0;
 }

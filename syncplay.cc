@@ -510,23 +510,24 @@ void State::loop()
 						ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImVec4(0.3f, 0.3f, 0.7f, 0.65f)));
 					}
 
-					std::string label = "##key" + std::to_string(i);
+					static std::string key_label = "##key" + std::to_string(i);
 					ImGui::TableSetColumnIndex(0);
-					ImGui::InputText(label.c_str(), file_state.key, sizeof(file_state.key));
+					ImGui::InputText(key_label.c_str(), file_state.key, sizeof(file_state.key));
 
-					label = "##port" + std::to_string(i);
+					static std::string port_label = "##port" + std::to_string(i);
 					ImGui::TableSetColumnIndex(1);
 					bool valid_port = port_number_available(file_state.port);
 					if (!valid_port) {
 						ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ImColor::HSV(0.f, 0.6f, 0.6f));
 					}
-					ImGui::InputInt(label.c_str(), &file_state.port, 1, 1);
+					ImGui::InputInt(port_label.c_str(), &file_state.port, 1, 1);
 					if (!valid_port) {
 						ImGui::PopStyleColor();
 					}
 
+					static std::string path = file.string();
 					ImGui::TableSetColumnIndex(2);
-					ImGui::Text("%s", file.c_str());
+					ImGui::Text("%s", path.c_str());
 				}
 				ImGui::EndTable();
 			}

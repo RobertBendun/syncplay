@@ -121,7 +121,7 @@ struct Note_Event
 
 	Note_Event(smf::MidiFile const& file, smf::MidiEvent const& event)
 	{
-		time = event.tick * 60.0 / tempo / file.getTicksPerQuarterNote();
+		time = double(event.tick) / file.getTicksPerQuarterNote();
 
 		if (event.isNote()) {
 			type = event.isNoteOn() ? Type::Note_On : Type::Note_Off;
@@ -132,8 +132,7 @@ struct Note_Event
 		}
 
 		if (event.isTempo()) {
-			double microseconds = event.getTempoMicroseconds();
-			tempo = 60.0 / microseconds * 1000000.0;
+			assert(event.getTempoBPM() && "we only support BPM = 120 now");
 			return;
 		}
 
@@ -183,6 +182,8 @@ struct State
 	// Playing mechanism
 	void switch_midi_file_to(unsigned id);
 
+	void cleanup_played_notes();
+
 	inline static State *the;
 
 	std::atomic<bool> quit = false;
@@ -193,8 +194,11 @@ struct State
 
 	std::vector<Midi_File_State> midi_states;
 	std::vector<std::unique_ptr<std::vector<Note_Event>>> events_per_file;
-	std::span<Note_Event> events_to_play;
+	std::span<Note_Event> events_to_play = {};
 	int selected_file = -1;
+	// Note played (port, channel, note)
+	std::multiset<std::tuple<unsigned, std::uint8_t, std::int8_t>> notes_played{};
+	std::mutex play_mutex;
 
 	ableton::Link link;
 
@@ -207,7 +211,6 @@ struct State
 	std::atomic<bool> request_stop = false;
 	std::atomic<bool> is_playing = false;
 	std::atomic<double> quantum = 4;
-
 };
 
 State::State()
@@ -361,12 +364,15 @@ void State::audio_session()
 
 			if (!is_playing && session_state.isPlaying()) {
 				session_state.requestBeatAtStartPlayingTime(0, quantum);
-				events_to_play = *events_per_file[selected_file];
+				if (selected_file >= 0) {
+					events_to_play = *events_per_file[selected_file];
+				}
 				is_playing = true;
 			}
 
 			if (is_playing && !session_state.isPlaying()) {
 				is_playing = false;
+				cleanup_played_notes();
 			}
 
 			link.commitAppSessionState(session_state);
@@ -376,7 +382,7 @@ void State::audio_session()
 		auto const time = link.clock().micros();
 		auto const beat = session_state.beatAtTime(time, quantum);
 
-		if (is_playing) {
+		if (is_playing && selected_file >= 0) {
 			auto to_play = events_to_play;
 			while (events_to_play.size() && events_to_play.front().time < beat) {
 				auto const& event = events_to_play.front();
@@ -387,21 +393,26 @@ void State::audio_session()
 					continue;
 				}
 
+				std::lock_guard guard_note_messages{play_mutex};
 				switch (event.type) {
 				break; case Note_Event::Type::Note_On:
 					send_note_on(midi_output_ports[port-1], event.channel, event.note, event.velocity);
+					notes_played.emplace(port-1, event.channel, event.note);
 
 				break; case Note_Event::Type::Note_Off:
 					send_note_off(midi_output_ports[port-1], event.channel, event.note);
+					notes_played.erase(std::tuple{port-1, event.channel, event.note});
 				}
 				std::cout << event << '\n';
 				events_to_play = events_to_play.subspan(1);
 			}
+			std::this_thread::yield();
+			continue;
 		}
 
 		// FIXME If we are not playing maybe we should sleep until condition variable is invoked?
 		// FIXME If we are playing then we know how much we need to wait for another note to appear
-		std::this_thread::sleep_for(std::chrono::microseconds(3));
+		std::this_thread::sleep_for(std::chrono::microseconds(1));
 	}
 }
 
@@ -413,6 +424,16 @@ void State::switch_midi_file_to(unsigned id)
 	// TODO remove currently playing notes
 	events_to_play = *events_per_file[id];
 	selected_file = id;
+	cleanup_played_notes();
+}
+
+void State::cleanup_played_notes()
+{
+	std::lock_guard cleanup{play_mutex};
+
+	for (auto [port, chan, note] : notes_played) {
+		send_note_off(midi_output_ports[port], chan, note);
+	}
 }
 
 void State::loop()

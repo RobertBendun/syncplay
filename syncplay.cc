@@ -448,6 +448,18 @@ void State::loop()
 
 	check_if_midi_files_arrived();
 
+	static std::vector<std::string> frame_allocated = {};
+	std::size_t frame_allocation_offset = 0;
+
+	auto label = [&](auto const& string) -> char const*
+	{
+		if (frame_allocation_offset >= frame_allocated.size()) {
+			frame_allocated.resize(frame_allocation_offset+1);
+			frame_allocated[frame_allocation_offset] = std::string(string);
+		}
+		return frame_allocated[frame_allocation_offset++].c_str();
+	};
+
 	ImGui::SeparatorText("Shared state settings"); {
 		if (ImGui::InputDouble("BPM", &bpm, 1, 10, "%.0f")) {
 			session_state.setTempo(bpm, time);
@@ -471,7 +483,7 @@ void State::loop()
 
 		unsigned i = 0;
 		for (auto const& port_name : midi_ports_list) {
-			ImGui::Text("%u. %s", ++i, port_name.c_str());
+			ImGui::Text("%u. %s", ++i, label(port_name));
 		}
 	}
 
@@ -510,24 +522,24 @@ void State::loop()
 						ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(ImVec4(0.3f, 0.3f, 0.7f, 0.65f)));
 					}
 
-					static std::string key_label = "##key" + std::to_string(i);
+					std::string key_label = "##key" + std::to_string(i);
 					ImGui::TableSetColumnIndex(0);
-					ImGui::InputText(key_label.c_str(), file_state.key, sizeof(file_state.key));
+					ImGui::InputText(label(key_label), file_state.key, sizeof(file_state.key));
 
-					static std::string port_label = "##port" + std::to_string(i);
+					std::string port_label = "##port" + std::to_string(i);
 					ImGui::TableSetColumnIndex(1);
 					bool valid_port = port_number_available(file_state.port);
 					if (!valid_port) {
 						ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ImColor::HSV(0.f, 0.6f, 0.6f));
 					}
-					ImGui::InputInt(port_label.c_str(), &file_state.port, 1, 1);
+					ImGui::InputInt(label(port_label), &file_state.port, 1, 1);
 					if (!valid_port) {
 						ImGui::PopStyleColor();
 					}
 
-					static std::string path = file.string();
+					std::string path = file.string();
 					ImGui::TableSetColumnIndex(2);
-					ImGui::Text("%s", path.c_str());
+					ImGui::Text("%s", label(path));
 				}
 				ImGui::EndTable();
 			}
